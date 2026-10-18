@@ -6,6 +6,11 @@ unzip xui-factor-panel.zip && cd xui-factor-panel
 sudo ./install.sh
 ```
 
+## تک خطی
+```sh
+bash <(curl -Ls https://raw.githubusercontent.com/Mrignored/xpf/main/install.sh)
+```
+
 اسکریپت به ترتیب: نصب xui-factor + سرویس systemd، نصب فایل‌های پنل، و در پایان می‌پرسد «پنل وب می‌خواهی؟ (y)».
 در صورت پاسخ y: پورت (پیش‌فرض `909`) ← نام کاربری/رمز (رمز خالی = ساخت خودکار) ← «دامنه داری؟»
 
