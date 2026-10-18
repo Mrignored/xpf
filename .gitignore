@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.bak
+.DS_Store
+# NOTE: vendor/*.tar.gz (the bundled xui-factor binary) must be committed - the installer needs it.
