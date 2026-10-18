@@ -208,14 +208,16 @@ class Coverage:
         self.excluded: set = set()
         for row in conn.execute(
             """SELECT rc.traffic_id AS tid, r.id AS rule_id, r.state AS state, r.factor_ppm AS ppm,
-                      (s.rule_id IS NOT NULL) AS is_scope
+                      (s.rule_id IS NOT NULL) AS is_scope, s.inbound_id AS scope_inbound
                  FROM xui_factor_rule_clients rc
                  JOIN xui_factor_rules r ON r.id = rc.rule_id
+                 JOIN client_traffics ct ON ct.id = rc.traffic_id
                  LEFT JOIN xui_factor_scopes s ON s.rule_id = r.id
                 WHERE r.state IN ('active','paused') AND rc.missing_since IS NULL"""
         ):
             current = self.cover.get(row["tid"])
-            entry = {"rule_id": row["rule_id"], "state": row["state"], "ppm": row["ppm"], "scope": bool(row["is_scope"])}
+            entry = {"rule_id": row["rule_id"], "state": row["state"], "ppm": row["ppm"], "scope": bool(row["is_scope"]),
+                     "scope_inbound": row["scope_inbound"]}
             # A client's own rule outranks an inbound/global scope.
             if current is None or (current["scope"] and not entry["scope"]):
                 self.cover[row["tid"]] = entry
@@ -366,6 +368,7 @@ class Reader:
                 "FROM inbounds i {} ORDER BY i.id LIMIT ? OFFSET ?".format(where),
                 params + [size_n, (page_n - 1) * size_n]).fetchall()
             scopes: Dict[int, sqlite3.Row] = {}
+            covered: Dict[int, int] = {}
             singles: Dict[int, int] = {}
             overrides: Dict[int, int] = {}
             if has_meta:
@@ -374,6 +377,8 @@ class Reader:
                         "FROM xui_factor_rules r JOIN xui_factor_scopes s ON s.rule_id = r.id "
                         "WHERE r.state IN ('active','paused') AND s.inbound_id IS NOT NULL ORDER BY r.id"):
                     scopes[r["inbound_id"]] = r
+                for r in conn.execute("SELECT rule_id, COUNT(*) AS n FROM xui_factor_rule_clients WHERE missing_since IS NULL GROUP BY rule_id"):
+                    covered[r["rule_id"]] = r["n"]
                 for r in conn.execute(
                         "SELECT r.inbound_id AS inbound_id, COUNT(*) AS n FROM xui_factor_rules r "
                         "WHERE r.state IN ('active','paused') AND r.id NOT IN (SELECT rule_id FROM xui_factor_scopes) "
@@ -389,6 +394,7 @@ class Reader:
                     "enable": bool(row["enable"]), "clients": row["clients"],
                     "factor": ppm_to_str(scope["ppm"]) if scope else None,
                     "state": scope["state"] if scope else None,
+                    "scope_clients": covered.get(scope["rule_id"], 0) if scope else None,
                     "client_rules": singles.get(row["id"], 0), "client_overrides": overrides.get(row["id"], 0),
                 })
             return page_payload(items, total, page_n, size_n)
@@ -473,6 +479,32 @@ class Reader:
         conn = connect_ro()
         try:
             return conn.execute("SELECT 1 FROM inbounds WHERE id = ?", (inbound_id,)).fetchone() is not None
+        finally:
+            conn.close()
+
+    def inbound_overlap(self, inbound_id: int) -> Dict[int, int]:
+        """Clients of this inbound that already sit under another scope: {other inbound id (0 = global): count}.
+
+        3x-ui lets one client belong to several inbounds and the engine factors a client once,
+        so a second scope over the same clients covers nobody and only produces repeated events."""
+        conn = connect_ro()
+        try:
+            if not has_factor_tables(conn):
+                return {}
+            names = table_names(conn)
+            if "client_inbounds" in names and "clients" in names:
+                rows = conn.execute("SELECT ct.id FROM client_inbounds ci JOIN clients c ON c.id = ci.client_id "
+                                    "JOIN client_traffics ct ON ct.email = c.email WHERE ci.inbound_id = ?", (inbound_id,)).fetchall()
+            else:
+                rows = conn.execute("SELECT id FROM client_traffics WHERE inbound_id = ?", (inbound_id,)).fetchall()
+            coverage = Coverage(conn)
+            shared: Dict[int, int] = {}
+            for row in rows:
+                cover = coverage.cover.get(row[0])
+                if cover and cover["scope"] and cover["scope_inbound"] != inbound_id:
+                    key = int(cover["scope_inbound"] or 0)
+                    shared[key] = shared.get(key, 0) + 1
+            return shared
         finally:
             conn.close()
 
@@ -663,6 +695,10 @@ class Manager:
             if not self.reader.inbound_exists(iid):
                 raise FactorError(tr("اینباند {} وجود ندارد.", iid), 404)
             self._require_running()
+            for other, count in sorted(self.reader.inbound_overlap(iid).items()):
+                if other == 0:
+                    raise FactorError(tr("اینباند {} کلاینت‌های مشترک با ضریب سراسری دارد ({} کلاینت)؛ ثبت ضریب برای آن بی‌اثر است و فقط رویدادهای تکراری می‌سازد.", iid, count), 409)
+                raise FactorError(tr("اینباند {} کلاینت‌های مشترک با ضریب اینباند {} دارد ({} کلاینت)؛ ثبت ضریب برای آن بی‌اثر است و فقط رویدادهای تکراری می‌سازد. فقط یکی از آن‌ها را نگه دارید.", iid, other, count), 409)
             existing = self.reader.live_inbound_scope(iid)
             if existing is None:
                 self.cli_strict("enable-all", "--inbound-id", str(iid), "--factor", text)
@@ -861,6 +897,34 @@ class Manager:
             raise FactorError(tr("نسخه‌ی نامعتبر."))
         self._spawn_manager(["update", "--yes", "--tag", tag, "--delay", "3"], "xfp-update")
         return {"scheduled": True, "tag": tag}
+
+    PRUNABLE_EVENTS = ("scope_auto_enroll_skipped",)
+
+    def prune_events(self, event_type: str = "scope_auto_enroll_skipped") -> Dict[str, Any]:
+        """Delete repeated audit events in small batches (never holds the database lock for long)."""
+        if event_type not in self.PRUNABLE_EVENTS:
+            raise FactorError(tr("نوع رویداد مجاز نیست."))
+        if detect_backend() != "sqlite":
+            raise FactorError(tr("پنل وب فعلاً فقط از دیتابیس SQLite پشتیبانی می‌کند (دستورات CLI برای PostgreSQL کار می‌کنند)."), 501)
+        deleted = 0
+        conn = sqlite3.connect(database_path(), timeout=30, isolation_level=None)
+        try:
+            conn.execute("PRAGMA busy_timeout = 30000")
+            if "xui_factor_events" not in table_names(conn):
+                return {"deleted": 0}
+            for _ in range(200):  # at most ~4 million rows per call
+                cur = conn.execute("DELETE FROM xui_factor_events WHERE id IN "
+                                   "(SELECT id FROM xui_factor_events WHERE event_type = ? LIMIT 20000)", (event_type,))
+                deleted += cur.rowcount
+                if cur.rowcount < 20000:
+                    break
+                time.sleep(0.15)  # let 3x-ui write in between
+        except sqlite3.Error as exc:
+            raise FactorError(tr("حذف جدول‌ها ناموفق بود: {}", exc), 500)
+        finally:
+            conn.close()
+            self.reader.invalidate()
+        return {"deleted": deleted}
 
     # -- diagnostics
     def doctor(self) -> str:

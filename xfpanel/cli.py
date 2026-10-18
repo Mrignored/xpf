@@ -120,6 +120,7 @@ def run(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("remove-client", help="remove factor of client(s)")
     p.add_argument("emails", nargs="+")
 
+    sub.add_parser("events-prune", help="delete the repeated 'auto-enroll skipped' events (caused by overlapping factors)")
     sub.add_parser("clear-all", help="remove every factor")
     sub.add_parser("disable", help="pause all factors and stop the service")
     sub.add_parser("enable", help="start the service and resume factors")
@@ -188,6 +189,8 @@ def dispatch(args: argparse.Namespace, mgr: core.Manager) -> int:  # noqa: C901 
         print("client {} (inbound {}) factor {} via {}".format(result["email"], result["inbound_id"], result["factor"], result["mode"]))
     elif cmd == "remove-client":
         return _report(mgr.bulk(args.emails, mgr.remove_client), "client factor removed")
+    elif cmd == "events-prune":
+        print("deleted {} events".format(mgr.prune_events()["deleted"]))
     elif cmd == "clear-all":
         result = mgr.clear_all()
         print("all factors cleared (overrides removed: {})".format(result["overrides_removed"]))

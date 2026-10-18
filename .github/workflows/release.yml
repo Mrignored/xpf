@@ -1,8 +1,9 @@
-# Creates a GitHub Release automatically whenever a version tag (v1.2.3) is pushed.
+# Every push to main whose version (xfpanel/__init__.py) has no Release yet creates
+# the tag vX.Y.Z and a GitHub Release. Servers then offer the update.
 name: release
 on:
   push:
-    tags: ['v*']
+    branches: [main]
 permissions:
   contents: write
 jobs:
@@ -10,11 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check tag matches the version in the code
-        run: |
-          code="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' xfpanel/__init__.py)"
-          [ "v$code" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != code version v$code"; exit 1; }
-      - name: Create release
+      - name: Create the release if this version is new
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          ver="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' xfpanel/__init__.py | tr -d '\r')"
+          [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "unreadable version '$ver'"; exit 1; }
+          if gh release view "v$ver" >/dev/null 2>&1; then echo "v$ver is already released"; exit 0; fi
+          flags=""; [[ "$ver" == *-* ]] && flags="--prerelease"
+          gh release create "v$ver" --target "$GITHUB_SHA" --title "v$ver" --generate-notes $flags

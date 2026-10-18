@@ -496,6 +496,69 @@ class BackupTest(PanelTest):
         self.assertEqual(self.effective()["user1"], ("3", "single"))
 
 
+class OverlapTest(PanelTest):
+    """A client attached to two inbounds must not get two scopes (the engine skips it forever and floods the audit log)."""
+
+    def share_clients(self):
+        db = sqlite3.connect(DB)
+        db.execute("insert into client_inbounds values (1, 2, '', 0)")  # user1 is also on inbound 2
+        db.commit()
+        db.close()
+
+    def test_second_scope_over_shared_clients_is_refused(self):
+        self.share_clients()
+        self.assertEqual(self.c.post("/api/inbounds/set", {"ids": [1], "factor": "1.1"})[1]["ok"], 1)
+        status, data = self.c.post("/api/inbounds/set", {"ids": [2], "factor": "1.1"})
+        self.assertEqual((status, data["ok"], len(data["failed"])), (200, 0, 1))
+        self.assertIn("مشترک", data["failed"][0]["error"])
+        _, en = self.c.call("POST", "/api/inbounds/set", {"ids": [2], "factor": "1.1"}, headers={"X-Lang": "en"})[:2]
+        self.assertIn("shares clients with the factor of inbound 1", en["failed"][0]["error"])
+        _, ov = self.c.get("/api/overview")
+        self.assertEqual(ov["inbound_scopes_active"], 1)
+        # no flood: the engine never saw a second scope
+        db = sqlite3.connect(DB)
+        skipped = db.execute("select count(*) from xui_factor_events where event_type='scope_auto_enroll_skipped'").fetchone()[0]
+        db.close()
+        self.assertEqual(skipped, 0)
+        # editing the existing scope is still fine
+        self.assertEqual(self.c.post("/api/inbounds/set", {"ids": [1], "factor": "1.3"})[1]["ok"], 1)
+
+    def test_unrelated_inbounds_are_allowed_and_nothing_flagged(self):
+        self.assertEqual(self.c.post("/api/inbounds/set", {"ids": [1, 2], "factor": "1.5"})[1]["ok"], 2)
+        _, ib = self.c.get("/api/inbounds")
+        rows = {i["id"]: i for i in ib["items"]}
+        self.assertEqual((rows[1]["scope_clients"], rows[2]["scope_clients"]), (3, 4))
+
+    def test_dashboard_ignores_deleted_clients(self):
+        self.c.post("/api/inbounds/set", {"ids": [1], "factor": "1.5"})
+        self.assertEqual(self.c.get("/api/overview")[1]["factored_clients"], 3)
+        db = sqlite3.connect(DB)
+        db.execute("delete from client_traffics where email='user1'")
+        db.commit()
+        db.close()
+        self.mgr.reader.invalidate()
+        self.assertEqual(self.c.get("/api/overview")[1]["factored_clients"], 2)
+
+    def test_prune_repeated_events(self):
+        self.c.post("/api/clients/set", {"items": [{"email": "user1"}], "factor": "2"})
+        db = sqlite3.connect(DB)
+        db.executemany("insert into xui_factor_events(rule_id,event_type,message,created_at) values (1,'scope_auto_enroll_skipped','x',1)", [()] * 45000)
+        db.commit()
+        keep = db.execute("select count(*) from xui_factor_events where event_type!='scope_auto_enroll_skipped'").fetchone()[0]
+        db.close()
+        status, res = self.c.post("/api/actions/prune-events")
+        self.assertEqual((status, res["deleted"]), (200, 45000))
+        db = sqlite3.connect(DB)
+        left = db.execute("select count(*) from xui_factor_events").fetchone()[0]
+        db.close()
+        self.assertEqual(left, keep)  # real events untouched
+        self.assertEqual(self.c.post("/api/actions/prune-events")[1]["deleted"], 0)
+
+    def test_prune_refuses_other_types(self):
+        with self.assertRaises(core.FactorError):
+            self.mgr.prune_events("traffic_applied")
+
+
 class UpdateAndLanguageTest(PanelTest):
     def setUp(self):
         super().setUp()

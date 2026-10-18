@@ -79,6 +79,7 @@ class Api:
             ("POST", "/api/actions/disable"): lambda q, b: self.m.disable_factor(),
             ("POST", "/api/actions/enable"): lambda q, b: self.m.enable_factor(),
             ("POST", "/api/actions/purge"): self.purge,
+            ("POST", "/api/actions/prune-events"): lambda q, b: self.m.prune_events(),
             ("POST", "/api/actions/backup"): lambda q, b: {"output": self.m.backup()},
             ("POST", "/api/actions/cleanup"): lambda q, b: {"output": self.m.cleanup(bool(b.get("dry_run", True)))},
             ("POST", "/api/actions/doctor"): lambda q, b: {"output": self.m.doctor()},

@@ -1,0 +1,5 @@
+# keep shell scripts LF even when committed from Windows
+* text=auto eol=lf
+*.sh text eol=lf
+*.tar.gz binary
+*.zip binary

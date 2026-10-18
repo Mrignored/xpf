@@ -251,4 +251,10 @@ window.XFP_EN = {
   'در حال بروزرسانی…': 'Updating…',
   'پنل چند ثانیه‌ی دیگر دوباره بالا می‌آید؛ این صفحه خودکار بارگذاری مجدد می‌شود.': 'The panel will be back in a few seconds; this page reloads automatically.',
   'بروزرسانی کامل نشد؛ نسخه‌ی قبلی حفظ شد. لاگ روی سرور: ': 'The update did not finish; the previous version was kept. Log on the server: ',
+  'این ضریب هیچ کلاینتی را پوشش نمی‌دهد چون کلاینت‌های این اینباند از قبل زیر ضریب اینباند دیگری هستند. حذفش کنید.': 'This factor covers no client because this inbound\'s clients are already under another inbound\'s factor. Remove it.',
+  'بی‌اثر (هم‌پوشان)': 'No effect (overlapping)',
+  'پاکسازی رویدادهای تکراری': 'Clean up repeated events',
+  'رویدادهای «ثبت خودکار ردشد» (ناشی از ضریب‌های هم‌پوشان) حذف می‌شوند؛ ضریب‌ها و ترافیک دست نمی‌خورند.': 'Deletes the “auto-enroll skipped” events (caused by overlapping factors); factors and traffic are untouched.',
+  'رویدادهای تکراری حذف شوند؟': 'Delete the repeated events?',
+  'رویدادهای حذف‌شده: ': 'Events deleted: ',
 };

@@ -73,4 +73,7 @@ EN = {
     "هنوز نسخه‌ای (Release یا Tag) در مخزن منتشر نشده است.": "No release or tag has been published in the repository yet.",
     "نسخه‌ی نامعتبر.": "Invalid version.",
     "بروزرسانی بدون تأیید انجام نمی‌شود.": "The update needs confirmation.",
+    "اینباند {} کلاینت‌های مشترک با ضریب سراسری دارد ({} کلاینت)؛ ثبت ضریب برای آن بی‌اثر است و فقط رویدادهای تکراری می‌سازد.": "Inbound {} shares clients with the global factor ({} clients); a factor on it would have no effect and only create repeated events.",
+    "اینباند {} کلاینت‌های مشترک با ضریب اینباند {} دارد ({} کلاینت)؛ ثبت ضریب برای آن بی‌اثر است و فقط رویدادهای تکراری می‌سازد. فقط یکی از آن‌ها را نگه دارید.": "Inbound {} shares clients with the factor of inbound {} ({} clients); a factor on it would have no effect and only create repeated events. Keep only one of them.",
+    "نوع رویداد مجاز نیست.": "This event type is not allowed.",
 }

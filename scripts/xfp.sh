@@ -479,6 +479,7 @@ Factors (same features as the web panel):
   xfp remove-client EMAIL [EMAIL...]
   xfp events [--kind lifecycle|all|<type>] [--page N]
   xfp clear-all                      remove every factor
+  xfp events-prune                   delete repeated "auto-enroll skipped" events (overlapping factors)
   xfp disable | enable               pause+stop / start+resume everything
   xfp purge [--yes]                  drop all xui_factor_* tables and the service
   xfp backup [--history | --full]    factor backup (small) or whole 3x-ui DB; prints the saved path
@@ -514,7 +515,7 @@ main() {
   case "$cmd" in
     help|-h|--help) usage ;;
     menu) menu ;;
-    status|inbounds|clients|events|set-inbound|remove-inbound|set-client|remove-client|clear-all|disable|enable|purge|backup|backups|restore|backup-delete|cleanup|doctor)
+    status|inbounds|clients|events|set-inbound|remove-inbound|set-client|remove-client|clear-all|events-prune|disable|enable|purge|backup|backups|restore|backup-delete|cleanup|doctor)
       need_root; xpy "$cmd" "$@" ;;
     credentials)
       need_root

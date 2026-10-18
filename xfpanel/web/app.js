@@ -366,7 +366,10 @@
         h('td', {}, h('input', { type: 'checkbox', checked: selected.has(i.id), onchange: (e) => { e.target.checked ? selected.add(i.id) : selected.delete(i.id); syncBulk(); e.target.closest('tr').classList.toggle('selected', e.target.checked); } })),
         h('td', { class: 'ltr' }, i.id), h('td', {}, i.remark || '—', i.enable ? null : h('span', { class: 'tag bad', style: 'margin-inline-start:6px' }, t('غیرفعال'))),
         h('td', { class: 'ltr' }, i.protocol + ':' + i.port), h('td', {}, num(i.clients)),
-        h('td', {}, factorBadge(i.factor, i.state)),
+        h('td', {}, factorBadge(i.factor, i.state),
+          i.factor && i.scope_clients === 0 && i.clients > 0
+            ? h('span', { class: 'tag warn', style: 'margin-inline-start:6px', title: t('این ضریب هیچ کلاینتی را پوشش نمی‌دهد چون کلاینت‌های این اینباند از قبل زیر ضریب اینباند دیگری هستند. حذفش کنید.') }, t('بی‌اثر (هم‌پوشان)'))
+            : null),
         h('td', {}, i.client_rules + i.client_overrides ? num(i.client_rules + i.client_overrides) + t(' کلاینت') : '—'),
         h('td', {}, h('div', { class: 'actions' },
           h('button', { class: 'btn small', onclick: async () => {
@@ -647,6 +650,11 @@
         h('button', { class: 'btn primary', onclick: act(t('فعال‌سازی'), '/api/actions/enable') }, t('فعال‌سازی مجدد'))]),
       card(t('پاکسازی همه ضریب‌ها'), t('همه ضریب‌های اینباند، کلاینت و سراسری حذف می‌شود. سرویس روشن می‌ماند و می‌توانید دوباره ضریب ثبت کنید.'), [
         h('button', { class: 'btn danger', onclick: async () => { if (await confirmBox(t('همه ضریب‌ها پاک شود؟ این کار قابل بازگشت نیست.'), { danger: true, ok: t('پاکسازی') })) act(t('پاکسازی ضریب‌ها'), '/api/actions/clear-all')(); } }, t('پاکسازی کل ضریب‌ها'))]),
+      card(t('پاکسازی رویدادهای تکراری'), t('رویدادهای «ثبت خودکار ردشد» (ناشی از ضریب‌های هم‌پوشان) حذف می‌شوند؛ ضریب‌ها و ترافیک دست نمی‌خورند.'), [
+        h('button', { class: 'btn', onclick: async () => {
+          if (!await confirmBox(t('رویدادهای تکراری حذف شوند؟'), { ok: t('حذف') })) return;
+          try { const r = await api('POST', '/api/actions/prune-events', {}); toast(t('رویدادهای حذف‌شده: ') + num(r.deleted), 'ok'); } catch (e) { fail(e); }
+        } }, t('پاکسازی رویدادهای تکراری'))]),
       card(t('ابزارها'), t('بررسی سلامت، گرفتن بکاپ و پاکسازی متادیتای قدیمی.'), [
         h('button', { class: 'btn', onclick: act(t('بررسی سلامت'), '/api/actions/doctor') }, t('بررسی سلامت (doctor)')),
         h('button', { class: 'btn', onclick: act(t('بکاپ'), '/api/actions/backup') }, t('گرفتن بکاپ')),
