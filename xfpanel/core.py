@@ -375,9 +375,13 @@ class Reader:
                 like = "%{}%".format(q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
                 params = [like, q, q, like]
             total = conn.execute("SELECT COUNT(*) FROM inbounds i " + where, params).fetchone()[0]
+            names = table_names(conn)
+            # 3x-ui 3.x: a client can belong to several inbounds (client_inbounds); client_traffics keeps only one of them.
+            count = ("(SELECT COUNT(DISTINCT ci.client_id) FROM client_inbounds ci WHERE ci.inbound_id = i.id)"
+                     if "client_inbounds" in names and "clients" in names
+                     else "(SELECT COUNT(*) FROM client_traffics c WHERE c.inbound_id = i.id)")
             rows = conn.execute(
-                "SELECT i.id, i.remark, i.protocol, i.port, i.enable, "
-                "(SELECT COUNT(*) FROM client_traffics c WHERE c.inbound_id = i.id) AS clients "
+                "SELECT i.id, i.remark, i.protocol, i.port, i.enable, " + count + " AS clients "
                 "FROM inbounds i {} ORDER BY i.id LIMIT ? OFFSET ?".format(where),
                 params + [size_n, (page_n - 1) * size_n]).fetchall()
             scopes: Dict[int, sqlite3.Row] = {}
@@ -426,12 +430,20 @@ class Reader:
             if q:
                 where.append("ct.email LIKE ? ESCAPE '\\'")
                 params.append("%{}%".format(q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")))
+            names = table_names(conn)
+            linked = "client_inbounds" in names and "clients" in names
             if inbound_id not in (None, "", 0, "0"):
-                where.append("ct.inbound_id = ?")
+                if linked:
+                    where.append("ct.email IN (SELECT c2.email FROM client_inbounds ci2 JOIN clients c2 ON c2.id = ci2.client_id "
+                                 "WHERE ci2.inbound_id = ?)")
+                else:
+                    where.append("ct.inbound_id = ?")
                 params.append(parse_id(inbound_id, tr("شناسه اینباند")))
-            columns = ("SELECT ct.id, ct.inbound_id, ct.enable, ct.email, ct.up, ct.down, ct.total, ct.expiry_time "
-                       "FROM client_traffics ct")
-            if "clients" in table_names(conn):
+            columns = ("SELECT ct.id, ct.inbound_id, ct.enable, ct.email, ct.up, ct.down, ct.total, ct.expiry_time"
+                       + (", (SELECT group_concat(ci3.inbound_id) FROM client_inbounds ci3 JOIN clients c3 ON c3.id = ci3.client_id "
+                          "WHERE c3.email = ct.email) AS inbound_ids" if linked else "")
+                       + " FROM client_traffics ct")
+            if "clients" in names:
                 # Same order as the 3x-ui clients page: by the client's own id (creation order).
                 columns += " LEFT JOIN clients cl ON cl.email = ct.email"
                 order = " ORDER BY COALESCE(cl.id, 9223372036854775807), ct.inbound_id, ct.id"
@@ -443,7 +455,9 @@ class Reader:
 
             def build(row: sqlite3.Row) -> Dict[str, Any]:
                 info = coverage.describe(row["id"]) if coverage else none_info
-                return {"id": row["id"], "email": row["email"], "inbound_id": row["inbound_id"], "enable": bool(row["enable"]),
+                ids = sorted({int(x) for x in str(row["inbound_ids"] or "").split(",") if x.strip().isdigit()}) if linked else []
+                return {"id": row["id"], "email": row["email"], "inbound_id": row["inbound_id"], "inbound_ids": ids or [row["inbound_id"]],
+                        "enable": bool(row["enable"]),
                         "up": row["up"], "down": row["down"], "total": row["total"], "expiry_time": row["expiry_time"], **info}
 
             if state in ("", "all"):

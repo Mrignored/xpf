@@ -449,7 +449,7 @@
         return h('tr', { class: selected.has(c.email) ? 'selected' : '' },
           h('td', {}, h('input', { type: 'checkbox', checked: selected.has(c.email), onchange: (e) => { e.target.checked ? selected.set(c.email, c.inbound_id) : selected.delete(c.email); syncBulk(); e.target.closest('tr').classList.toggle('selected', e.target.checked); } })),
           h('td', { class: 'ltr' }, c.email, c.enable ? null : h('span', { class: 'tag bad', style: 'margin-inline-start:6px' }, t('غیرفعال'))),
-          h('td', { class: 'ltr' }, c.inbound_id), h('td', { class: 'ltr' }, bytes((c.up || 0) + (c.down || 0))),
+          h('td', { class: 'ltr' }, (c.inbound_ids || [c.inbound_id]).join(', ')), h('td', { class: 'ltr' }, bytes((c.up || 0) + (c.down || 0))),
           h('td', {}, factorBadge(c.factor, c.state)),
           h('td', {}, h('span', { class: 'tag ' + kind }, label), c.source === 'override' && c.base_factor ? h('span', { class: 'muted', style: 'margin-inline-start:6px' }, t('(پایه ×') + c.base_factor + ')') : null),
           h('td', {}, h('div', { class: 'actions' },

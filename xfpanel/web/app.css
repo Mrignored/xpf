@@ -91,6 +91,8 @@ tbody tr:hover td { background: var(--bg-hover); }
 tr:last-child td { border-bottom: 0; }
 tr.selected td { background: var(--primary-bg); }
 td.ltr, .ltr { direction: ltr; text-align: left; }
+/* Keep LTR cell values (e-mails, numbers) under their right-aligned headers in the RTL layout. */
+:root[dir="rtl"] td.ltr, :root[dir="rtl"] th.ltr { text-align: right; }
 td.wrap { white-space: normal; max-width: 460px; word-break: break-word; }
 .empty { padding: 34px; text-align: center; color: var(--muted); }
 .actions { display: flex; gap: 6px; }

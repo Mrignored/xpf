@@ -349,6 +349,7 @@ class PanelTest(unittest.TestCase):
     def test_clients_follow_the_3xui_order(self):
         db = sqlite3.connect(DB)
         db.execute("update clients set id = id + 100 where email = 'user1'")  # created last in 3x-ui
+        db.execute("update client_inbounds set client_id = client_id + 100 where client_id = 1")
         db.commit()
         db.close()
         _, lst = self.c.get("/api/clients?size=50")
@@ -382,6 +383,24 @@ class PanelTest(unittest.TestCase):
         finally:
             server.FONT_DIR = old
             shutil.rmtree(fonts, ignore_errors=True)
+
+    def test_clients_can_belong_to_several_inbounds(self):
+        """3x-ui 3.x links clients to inbounds many-to-many; counts and filters must follow client_inbounds."""
+        db = sqlite3.connect(DB)
+        db.execute("insert into client_inbounds values (1, 2, '', 0)")      # user1 is also on inbound 2
+        db.execute("insert into client_inbounds values (1, 3, '', 0)")      # ... and on the otherwise empty inbound 3
+        db.commit()
+        db.close()
+        _, inb = self.c.get("/api/inbounds?size=50")
+        counts = {i["id"]: i["clients"] for i in inb["items"]}
+        self.assertEqual(counts, {1: 3, 2: 5, 3: 1})
+        _, lst = self.c.get("/api/clients?inbound_id=3")
+        self.assertEqual([c["email"] for c in lst["items"]], ["user1"])
+        _, lst = self.c.get("/api/clients?inbound_id=2&size=50")
+        self.assertEqual(sorted(c["email"] for c in lst["items"]), ["user1", "user4", "user5", "user6", "user7"])
+        _, lst = self.c.get("/api/clients?q=user1")
+        self.assertEqual(lst["items"][0]["inbound_ids"], [1, 2, 3])
+        self.assertEqual(lst["total"], 1)
 
     def test_node_factoring_switch(self):
         status, info = self.c.get("/api/node")
