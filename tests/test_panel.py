@@ -295,6 +295,112 @@ class PanelTest(unittest.TestCase):
         _, ev = self.c.get("/api/events?kind=traffic_applied")
         self.assertEqual((ev["total"], ev["items"][0]["email"], ev["items"][0]["extra_bytes"]), (1, "user1", 4000))
 
+    def test_factor_math_is_exact_for_every_factor(self):
+        """Extra traffic must equal floor(sum(delta) * (factor-1)) per direction, remainders carried between ticks."""
+        factors = ["1", "1.000001", "1.5", "2.333333", "3", "7.25", "100.123456"]
+        steps = [(3, 7), (1001, 1), (999999, 123457), (5, 5)]
+        for index, text in enumerate(factors):
+            email = "user%d" % (index + 1)
+            self.assertEqual(self.c.post("/api/clients/set", {"items": [{"email": email}], "factor": text})[0], 200, text)
+            whole, _, frac = text.partition(".")
+            extra_ppm = int(whole) * 1_000_000 + int((frac + "000000")[:6]) - 1_000_000
+            db = sqlite3.connect(DB)
+            base_up, base_down = db.execute("select up, down from client_traffics where email=?", (email,)).fetchone()
+            db.close()
+            sum_up = sum_down = 0
+            for du, dd in steps:
+                db = sqlite3.connect(DB)
+                db.execute("update client_traffics set up = up + ?, down = down + ? where email = ?", (du, dd, email))
+                db.commit()
+                db.close()
+                sum_up += du
+                sum_down += dd
+                self.mgr.cli_strict("tick")
+                db = sqlite3.connect(DB)
+                up, down = db.execute("select up, down from client_traffics where email=?", (email,)).fetchone()
+                db.close()
+                # The engine adds its own extra to the counter; the next real delta is measured from that baseline.
+                self.assertEqual(up, base_up + sum_up + sum_up * extra_ppm // 1_000_000, "up factor %s after %s" % (text, (du, dd)))
+                self.assertEqual(down, base_down + sum_down + sum_down * extra_ppm // 1_000_000, "down factor %s after %s" % (text, (du, dd)))
+
+    def test_extra_traffic_is_read_from_both_event_formats(self):
+        self.assertEqual(core.extra_from_message("traffic id 1 inbound 2 email a extra_up=10 extra_down=30"), 40)
+        self.assertEqual(core.extra_from_message("traffic id 1 inbound 2 email a extra_up=10 extra_down=30 extra_all_time=40"), 40)
+        self.assertEqual(core.extra_from_message("traffic id 1 inbound 2 email a extra_all_time=77"), 77)
+        self.assertIsNone(core.extra_from_message("rule enabled"))
+        self.c.post("/api/clients/set", {"items": [{"email": "user1"}], "factor": "2"})
+        db = sqlite3.connect(DB)
+        for message in ("traffic id 1 inbound 1 email user1 extra_up=10 extra_down=30",
+                        "traffic id 1 inbound 1 email user1 extra_up=1 extra_down=2 extra_all_time=3",
+                        "traffic id 1 inbound 1 email user1 extra_all_time=70"):
+            db.execute("insert into xui_factor_events(rule_id, event_type, message, created_at) values (NULL, 'traffic_applied', ?, strftime('%s','now'))", (message,))
+        db.commit()
+        db.close()
+        self.mgr.reader.invalidate()
+        _, ov = self.c.get("/api/overview")
+        self.assertEqual((ov["applications"], ov["extra_bytes"], ov["extra_bytes_24h"]), (3, 40 + 3 + 70, 113))
+
+    def test_factor_below_one_is_refused_with_a_clear_message(self):
+        for bad in ("0.5", "0", "0.999999", "-1"):
+            status, body = self.c.post("/api/clients/set", {"items": [{"email": "user1"}], "factor": bad})
+            self.assertNotEqual(status, 200, bad)
+            self.assertTrue(body.get("error") or body.get("message"), bad)
+
+    def test_clients_follow_the_3xui_order(self):
+        db = sqlite3.connect(DB)
+        db.execute("update clients set id = id + 100 where email = 'user1'")  # created last in 3x-ui
+        db.commit()
+        db.close()
+        _, lst = self.c.get("/api/clients?size=50")
+        self.assertEqual([i["email"] for i in lst["items"]], ["user2", "user3", "user4", "user5", "user6", "user7", "user1"])
+        _, one = self.c.get("/api/clients?q=user1")
+        self.assertEqual([i["email"] for i in one["items"]], ["user1"])
+        _, inb = self.c.get("/api/clients?inbound_id=1")
+        self.assertEqual([i["email"] for i in inb["items"]], ["user2", "user3", "user1"])
+
+    def test_optional_fonts_are_served_safely(self):
+        status, body, resp = self.c.call("GET", "/fonts.css")
+        self.assertEqual(status, 200)
+        self.assertIn("text/css", resp.getheader("Content-Type"))
+        fonts = tempfile.mkdtemp(prefix="xfp-fonts-")
+        with open(os.path.join(fonts, "Vazirmatn-Regular.woff2"), "wb") as fh:
+            fh.write(b"wOF2-test")
+        with open(os.path.join(fonts, "notes.txt"), "w") as fh:
+            fh.write("secret")
+        old = server.FONT_DIR
+        server.FONT_DIR = fonts
+        try:
+            _, css, _ = self.c.call("GET", "/fonts.css")
+            css = css.decode() if isinstance(css, bytes) else css
+            self.assertIn('font-family:"Vazirmatn"', css)
+            self.assertNotIn("notes", css)
+            status, data, resp = self.c.call("GET", "/fonts/Vazirmatn-Regular.woff2")
+            self.assertEqual((status, data), (200, b"wOF2-test"))
+            self.assertEqual(resp.getheader("Content-Type"), "font/woff2")
+            for bad in ("/fonts/notes.txt", "/fonts/..%2f..%2fetc%2fpasswd", "/fonts/../app.py", "/fonts/missing.woff2"):
+                self.assertEqual(self.c.call("GET", bad)[0], 404, bad)
+        finally:
+            server.FONT_DIR = old
+            shutil.rmtree(fonts, ignore_errors=True)
+
+    def test_node_factoring_switch(self):
+        status, info = self.c.get("/api/node")
+        self.assertEqual(status, 200)
+        self.assertIn(info["role"], ("standalone", "unknown"))  # "unknown" only with an engine older than 0.6
+        self.assertIs(info["factor_on_managed_node"], False)
+        os.chmod(FACTOR_CFG, 0o600)
+        status, info = self.c.post("/api/actions/node-factor", {"enabled": True})
+        self.assertEqual(status, 200)
+        self.assertEqual((info["factor_on_managed_node"], info["changed"]), (True, True))
+        with open(FACTOR_CFG) as fh:
+            self.assertIs(json.load(fh)["factor_on_managed_node"], True)
+        self.assertEqual(os.stat(FACTOR_CFG).st_mode & 0o777, 0o600)
+        self.assertTrue(self.mgr.cli("doctor").ok)  # the rewritten config still loads
+        self.assertIs(self.c.post("/api/actions/node-factor", {"enabled": True})[1]["changed"], False)
+        self.assertIs(self.c.post("/api/actions/node-factor", {"enabled": False})[1]["factor_on_managed_node"], False)
+        for bad in ("yes", 1, None):
+            self.assertNotEqual(self.c.post("/api/actions/node-factor", {"enabled": bad})[0], 200, bad)
+
     def test_events_filters(self):
         self.c.post("/api/clients/set", {"items": [{"email": "user1"}], "factor": "2"})
         _, ev = self.c.get("/api/events?kind=all&size=10")

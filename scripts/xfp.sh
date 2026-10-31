@@ -419,6 +419,7 @@ menu() {
  10) Disable factor (pause+stop)  22) Re-run web panel setup
  11) Enable factor                23) Remove web panel / uninstall
  12) Purge factor from database   24) Check for / install updates
+                                 25) Node factoring on/off
   0) Exit
 ===================================================
 EOF
@@ -448,6 +449,7 @@ EOF
       22) web_setup ;;
       23) uninstall_web ;;
       24) update_cmd ;;
+      25) xpy node-factor status; read -r -p "on|off|(Enter = keep): " a; case "$a" in on|off) xpy node-factor "$a" ;; esac ;;
       0) exit 0 ;;
       *) warn "unknown option" ;;
     esac
@@ -487,6 +489,7 @@ Factors (same features as the web panel):
   xfp restore [FILE|latest] [--yes]  restore factor records (asks which one when no FILE)
   xfp backup-delete FILE
   xfp cleanup [--apply] | doctor
+  xfp node-factor [on|off|status]   factor a panel that a 3x-ui master manages (node); default: off
 
 Updates:
   xfp update [--check] [--yes]       check GitHub for a newer release and install it (asks to confirm)
@@ -515,7 +518,7 @@ main() {
   case "$cmd" in
     help|-h|--help) usage ;;
     menu) menu ;;
-    status|inbounds|clients|events|set-inbound|remove-inbound|set-client|remove-client|clear-all|events-prune|disable|enable|purge|backup|backups|restore|backup-delete|cleanup|doctor)
+    status|inbounds|clients|events|set-inbound|remove-inbound|set-client|remove-client|clear-all|events-prune|disable|enable|purge|backup|backups|restore|backup-delete|cleanup|doctor|node-factor)
       need_root; xpy "$cmd" "$@" ;;
     credentials)
       need_root

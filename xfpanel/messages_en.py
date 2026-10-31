@@ -76,4 +76,8 @@ EN = {
     "اینباند {} کلاینت‌های مشترک با ضریب سراسری دارد ({} کلاینت)؛ ثبت ضریب برای آن بی‌اثر است و فقط رویدادهای تکراری می‌سازد.": "Inbound {} shares clients with the global factor ({} clients); a factor on it would have no effect and only create repeated events.",
     "اینباند {} کلاینت‌های مشترک با ضریب اینباند {} دارد ({} کلاینت)؛ ثبت ضریب برای آن بی‌اثر است و فقط رویدادهای تکراری می‌سازد. فقط یکی از آن‌ها را نگه دارید.": "Inbound {} shares clients with the factor of inbound {} ({} clients); a factor on it would have no effect and only create repeated events. Keep only one of them.",
     "نوع رویداد مجاز نیست.": "This event type is not allowed.",
+    'مقدار نامعتبر است.': 'Invalid value.',
+    'فایل تنظیمات فاکتور پیدا نشد: {}': 'The factor config file was not found: {}',
+    'فایل تنظیمات فاکتور خراب است: {}': 'The factor config file is damaged: {}',
+    'نوشتن فایل تنظیمات ناموفق بود: {}': 'Writing the config file failed: {}',
 }

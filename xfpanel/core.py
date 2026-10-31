@@ -37,9 +37,6 @@ Description=XuiFactor 3x-ui traffic factor sidecar
 After=network.target x-ui.service
 
 [Service]
-EnvironmentFile=-/etc/default/x-ui
-EnvironmentFile=-/etc/conf.d/x-ui
-EnvironmentFile=-/etc/sysconfig/x-ui
 Type=simple
 User=root
 Group=root
@@ -241,21 +238,31 @@ class Coverage:
         return {"source": "none", "factor": None, "state": None, "base_factor": None}
 
 
-_EXTRA_RE = re.compile(r"extra_all_time=(\d+)")
+_EXTRA_UP_RE = re.compile(r"\bextra_up=(\d+)")
+_EXTRA_DOWN_RE = re.compile(r"\bextra_down=(\d+)")
+_EXTRA_ALL_RE = re.compile(r"\bextra_all_time=(\d+)")
 _EMAIL_RE = re.compile(r"\bemail (\S+)")
 _INBOUND_RE = re.compile(r"\binbound (\d+)")
+
+
+def extra_from_message(message: str) -> Optional[int]:
+    """Extra bytes of a traffic_applied event: up+down (engine 0.6+), or the old extra_all_time total."""
+    up, down = _EXTRA_UP_RE.search(message), _EXTRA_DOWN_RE.search(message)
+    if up or down:
+        return (int(up.group(1)) if up else 0) + (int(down.group(1)) if down else 0)
+    old = _EXTRA_ALL_RE.search(message)
+    return int(old.group(1)) if old else None
 
 
 def _hydrate_event(row: sqlite3.Row) -> Dict[str, Any]:
     message = row["message"] or ""
     email = _EMAIL_RE.search(message)
     inbound = _INBOUND_RE.search(message)
-    extra = _EXTRA_RE.search(message)
     return {
         "id": row["id"], "rule_id": row["rule_id"], "type": row["event_type"], "message": message,
         "created_at": row["created_at"], "email": email.group(1) if email else None,
         "inbound_id": int(inbound.group(1)) if inbound else None,
-        "extra_bytes": int(extra.group(1)) if extra else None,
+        "extra_bytes": extra_from_message(message),
     }
 
 
@@ -331,7 +338,13 @@ class Reader:
     def _impact(self, conn: sqlite3.Connection) -> Dict[str, Any]:
         """Traffic added by factors, aggregated from audit events (cached: it scans them)."""
         def compute() -> Dict[str, Any]:
-            expr = "COALESCE(SUM(CAST(substr(message, instr(message,'extra_all_time=') + 15) AS INTEGER)), 0)"
+            def part(key: str) -> str:
+                return ("CASE WHEN instr(message,'{k}=') > 0 THEN CAST(substr(message, instr(message,'{k}=') + {n}) AS INTEGER) "
+                        "ELSE 0 END").format(k=key, n=len(key) + 1)
+            both = "({} + {})".format(part("extra_up"), part("extra_down"))
+            # engine 0.6+ writes extra_up/extra_down; older events (and only those) carry extra_all_time
+            expr = "COALESCE(SUM(CASE WHEN instr(message,'extra_up=') > 0 OR instr(message,'extra_down=') > 0 THEN {} ELSE {} END), 0)".format(
+                both, part("extra_all_time"))
             total = conn.execute("SELECT COUNT(*), {}, MAX(created_at) FROM xui_factor_events WHERE event_type = 'traffic_applied'".format(expr)).fetchone()
             day = conn.execute("SELECT COUNT(*), {} FROM xui_factor_events WHERE event_type = 'traffic_applied' "
                                "AND created_at >= strftime('%s','now') - 86400".format(expr)).fetchone()
@@ -411,14 +424,20 @@ class Reader:
             where, params = [], []  # type: List[str], List[Any]
             q = (q or "").strip()
             if q:
-                where.append("email LIKE ? ESCAPE '\\'")
+                where.append("ct.email LIKE ? ESCAPE '\\'")
                 params.append("%{}%".format(q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")))
             if inbound_id not in (None, "", 0, "0"):
-                where.append("inbound_id = ?")
+                where.append("ct.inbound_id = ?")
                 params.append(parse_id(inbound_id, tr("شناسه اینباند")))
-            columns = "SELECT id, inbound_id, enable, email, up, down, total, expiry_time FROM client_traffics"
+            columns = ("SELECT ct.id, ct.inbound_id, ct.enable, ct.email, ct.up, ct.down, ct.total, ct.expiry_time "
+                       "FROM client_traffics ct")
+            if "clients" in table_names(conn):
+                # Same order as the 3x-ui clients page: by the client's own id (creation order).
+                columns += " LEFT JOIN clients cl ON cl.email = ct.email"
+                order = " ORDER BY COALESCE(cl.id, 9223372036854775807), ct.inbound_id, ct.id"
+            else:
+                order = " ORDER BY ct.id"
             clause = (" WHERE " + " AND ".join(where)) if where else ""
-            order = " ORDER BY inbound_id, email COLLATE NOCASE"
             coverage = Coverage(conn) if has_factor_tables(conn) else None
             none_info = {"source": "none", "factor": None, "state": None, "base_factor": None}
 
@@ -429,7 +448,7 @@ class Reader:
 
             if state in ("", "all"):
                 # Common case: let SQLite paginate instead of materialising every client.
-                total = conn.execute("SELECT COUNT(*) FROM client_traffics" + clause, params).fetchone()[0]
+                total = conn.execute("SELECT COUNT(*) FROM client_traffics ct" + clause, params).fetchone()[0]
                 rows = conn.execute(columns + clause + order + " LIMIT ? OFFSET ?", params + [size_n, (page_n - 1) * size_n]).fetchall()
                 return page_payload([build(r) for r in rows], total, page_n, size_n)
             items = [item for item in map(build, conn.execute(columns + clause + order, params)) if _state_matches(state, item["source"])]
@@ -925,6 +944,82 @@ class Manager:
             conn.close()
             self.reader.invalidate()
         return {"deleted": deleted}
+
+    # -- master / node role
+    _DOCTOR_FIELD = re.compile(r"^\s*(role|nodes|factoring)\s*[:=]?\s+(.+?)\s*$", re.I | re.M)
+
+    def node_info(self) -> Dict[str, Any]:
+        """Panel role reported by the engine (standalone / master / node) and the node-factoring switch."""
+        def compute() -> Dict[str, Any]:
+            fields: Dict[str, str] = {}
+            res = self.cli("doctor", timeout=30)
+            for key, value in self._DOCTOR_FIELD.findall(res.out + "\n" + res.err):
+                fields.setdefault(key.lower(), value)
+            role = fields.get("role", "").split()[0].lower() if fields.get("role") else "unknown"
+            if role not in ("standalone", "master", "node"):
+                role = "unknown"
+            try:
+                nodes = int(fields.get("nodes", "0").split()[0])
+            except ValueError:
+                nodes = 0
+            return {"role": role, "nodes": nodes,
+                    "factor_on_managed_node": bool(_factor_config().get("factor_on_managed_node", False))}
+        return self.reader._cached("node-info", 20.0, compute)
+
+    def set_node_factoring(self, enabled: Any) -> Dict[str, Any]:
+        """Switch ``factor_on_managed_node`` in the engine config and restart the service so it takes effect."""
+        if not isinstance(enabled, bool):
+            raise FactorError(tr("مقدار نامعتبر است."))
+        path = settings.FACTOR_CONFIG_PATH
+        with self._lock:
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except OSError:
+                raise FactorError(tr("فایل تنظیمات فاکتور پیدا نشد: {}", path), 500)
+            except ValueError:
+                raise FactorError(tr("فایل تنظیمات فاکتور خراب است: {}", path), 500)
+            if not isinstance(data, dict):
+                raise FactorError(tr("فایل تنظیمات فاکتور خراب است: {}", path), 500)
+            changed = bool(data.get("factor_on_managed_node", False)) != enabled
+            if changed:
+                data["factor_on_managed_node"] = enabled
+                self._write_config(path, data)
+            restarted = False
+            if changed and self.service_status()["active"] == "active":
+                restarted = self._systemctl("restart", settings.FACTOR_SERVICE).ok
+            self.reader.invalidate()
+        info = dict(self.node_info())
+        info.update({"changed": changed, "restarted": restarted})
+        return info
+
+    @staticmethod
+    def _write_config(path: str, data: Dict[str, Any]) -> None:
+        """Atomic rewrite that keeps the owner and the strict file mode (the config can hold a DB password)."""
+        try:
+            st = os.stat(path)
+            mode, uid, gid = st.st_mode & 0o777, st.st_uid, st.st_gid
+        except OSError:
+            mode, uid, gid = 0o600, None, None
+        tmp = "{}.tmp-{}".format(path, os.getpid())
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+                fh.write("\n")
+            os.chmod(tmp, mode)
+            if uid is not None and hasattr(os, "chown"):
+                try:
+                    os.chown(tmp, uid, gid)
+                except OSError:
+                    pass
+            os.replace(tmp, path)
+        except OSError as exc:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise FactorError(tr("نوشتن فایل تنظیمات ناموفق بود: {}", exc), 500)
 
     # -- diagnostics
     def doctor(self) -> str:

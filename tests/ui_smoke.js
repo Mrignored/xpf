@@ -9,7 +9,7 @@ const assert = require('assert');
 class Node {}
 class TextNode extends Node { constructor(t) { super(); this.nodeType = 3; this.data = String(t); this.parentNode = null; } get textContent() { return this.data; } set textContent(v) { this.data = String(v); } }
 class El extends Node {
-  constructor(tag) { super(); this.nodeType = 1; this.tagName = tag.toUpperCase(); this.attrs = {}; this.childNodes = []; this.parentNode = null; this.listeners = {}; this.style = {}; this.value = ''; this.checked = false; this.disabled = false; this.className = ''; this.dataset = {}; this.selected = false;
+  constructor(tag) { super(); this.nodeType = 1; this.tagName = tag.toUpperCase(); this.attrs = {}; this.childNodes = []; this.parentNode = null; this.listeners = {}; this.style = { setProperty(k, v) { this[k] = v; } }; this.value = ''; this.checked = false; this.disabled = false; this.className = ''; this.dataset = {}; this.selected = false;
     const self = this; this.classList = { toggle(c, on) { const s = new Set(self.className.split(' ').filter(Boolean)); (on ? s.add(c) : s.delete(c)); self.className = [...s].join(' '); }, contains(c) { return self.className.split(' ').includes(c); } }; }
   setAttribute(k, v) { this.attrs[k] = v; if (k.startsWith('data-')) this.dataset[k.slice(5)] = v; if (k === 'value') this.value = v; }
   append(...kids) { for (const k of kids) { const n = (k instanceof El || k instanceof TextNode) ? k : new TextNode(k); if (n.parentNode) n.parentNode.removeChild(n); n.parentNode = this; this.childNodes.push(n); } }

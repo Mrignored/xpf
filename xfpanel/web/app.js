@@ -20,7 +20,10 @@
       if (v === null || v === undefined || v === false) continue;
       if (k === 'class') el.className = v;
       else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
-      else if (k === 'value') el.value = v;
+      else if (k === 'style' && typeof v === 'string') {
+        // The CSP forbids style="" attributes, so declarations are applied through the CSSOM instead.
+        for (const decl of v.split(';')) { const i = decl.indexOf(':'); if (i > 0) el.style.setProperty(decl.slice(0, i).trim(), decl.slice(i + 1).trim()); }
+      } else if (k === 'value') el.value = v;
       else if (k === 'checked' || k === 'disabled' || k === 'selected') el[k] = !!v;
       else el.setAttribute(k, v === true ? '' : v);
     }
@@ -644,10 +647,31 @@
       } catch (e) { fail(e); }
     };
     const card = (title, text, buttons, extra) => h('div', { class: 'card ' + (extra || '') }, h('h2', {}, title), h('p', {}, text), h('div', { class: 'row' }, buttons));
+    const nodeStatus = h('p', { class: 'muted' }, '…');
+    const nodeBtnOn = h('button', { class: 'btn primary' }, t('فعال‌سازی ضریب روی نود'));
+    const nodeBtnOff = h('button', { class: 'btn' }, t('غیرفعال‌سازی ضریب روی نود'));
+    const roleName = { standalone: t('مستقل'), master: t('سرور اصلی'), node: t('نود'), unknown: t('نامشخص') };
+    const paintNode = (info) => {
+      const on = !!info.factor_on_managed_node;
+      nodeStatus.textContent = t('نقش این پنل: ') + (roleName[info.role] || roleName.unknown) + (info.nodes ? ' (' + num(info.nodes) + t(' نود') + ')' : '')
+        + ' — ' + t('ضریب روی نود: ') + (on ? t('فعال') : t('غیرفعال'));
+      nodeBtnOn.disabled = on; nodeBtnOff.disabled = !on;
+    };
+    const setNode = (enabled) => async () => {
+      const text = enabled ? t('ضریب روی نود فعال شود؟ فقط اگر سرور اصلی همین کلاینت‌ها را ضریب نمی‌دهد فعالش کنید، وگرنه ترافیک دو بار ضرب می‌شود.')
+        : t('ضریب روی نود غیرفعال شود؟');
+      if (!await confirmBox(text, { danger: enabled, ok: t('تأیید') })) return;
+      try { const r = await api('POST', '/api/actions/node-factor', { enabled }); paintNode(r); toast(t('ذخیره شد.'), 'ok'); } catch (e) { fail(e); }
+    };
+    nodeBtnOn.onclick = setNode(true); nodeBtnOff.onclick = setNode(false);
+    api('GET', '/api/node').then(paintNode).catch((e) => { nodeStatus.textContent = e.message || ''; });
     main.append(h('h1', {}, t('نگهداری و حذف')),
       card(t('فعال / غیرفعال‌سازی کلی فاکتور'), t('غیرفعال‌سازی: همه ضریب‌ها متوقف (pause) و سرویس خاموش می‌شود؛ ضریب‌ها در دیتابیس می‌مانند. فعال‌سازی: سرویس روشن و ضریب‌ها از مصرف فعلی ادامه پیدا می‌کنند.'), [
         h('button', { class: 'btn', onclick: async () => { if (await confirmBox(t('فاکتور به‌طور کامل غیرفعال شود؟'), { danger: true, ok: t('غیرفعال‌سازی') })) act(t('غیرفعال‌سازی'), '/api/actions/disable')(); } }, t('غیرفعال‌سازی کامل فاکتور')),
         h('button', { class: 'btn primary', onclick: act(t('فعال‌سازی'), '/api/actions/enable') }, t('فعال‌سازی مجدد'))]),
+      h('div', { class: 'card' }, h('h2', {}, t('ضریب روی نودها')),
+        h('p', {}, t('اگر 3x-ui شما نود دارد، ضریب را فقط روی سرور اصلی نصب کنید تا ترافیک نودها یک بار ضرب شود. روی پنلی که نود است، ضریب به‌صورت پیش‌فرض اعمال نمی‌شود؛ با این سوئیچ می‌توانید آن را فعال یا غیرفعال کنید.')),
+        nodeStatus, h('div', { class: 'row' }, [nodeBtnOn, nodeBtnOff])),
       card(t('پاکسازی همه ضریب‌ها'), t('همه ضریب‌های اینباند، کلاینت و سراسری حذف می‌شود. سرویس روشن می‌ماند و می‌توانید دوباره ضریب ثبت کنید.'), [
         h('button', { class: 'btn danger', onclick: async () => { if (await confirmBox(t('همه ضریب‌ها پاک شود؟ این کار قابل بازگشت نیست.'), { danger: true, ok: t('پاکسازی') })) act(t('پاکسازی ضریب‌ها'), '/api/actions/clear-all')(); } }, t('پاکسازی کل ضریب‌ها'))]),
       card(t('پاکسازی رویدادهای تکراری'), t('رویدادهای «ثبت خودکار ردشد» (ناشی از ضریب‌های هم‌پوشان) حذف می‌شوند؛ ضریب‌ها و ترافیک دست نمی‌خورند.'), [

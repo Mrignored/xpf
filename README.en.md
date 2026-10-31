@@ -37,6 +37,14 @@ Copy the new files into the repo, then `bash tools/release.sh 1.2.0 "note"` (bum
 Dashboard -> "Check for updates" -> "Update now", or `xfp update` (asks `Update to release vX? [y/N]`), `xfp update --check`, `xfp update --archive release.tar.gz` (offline). A factor backup is taken first, the previous files are kept in `/opt/xui-factor-panel.bak`, and a failed update is rolled back automatically. Config, password, certificates, database and factors are never touched.
 Updates run code from your repository as root: enable two-factor authentication on your GitHub account.
 
+## Behaviour notes (v1.3)
+
+* The factor is >= 1 (engine limit). `0.5` is not possible with the official engine; the panel refuses it with a clear message.
+* **Nodes:** install the factor on the master only (it factors node traffic once). A panel that is a node refuses ticks by default (`role: node`). The "Factor on nodes" switch (Maintenance) or `xfp node-factor on|off` flips the engine's `factor_on_managed_node` and restarts the service. Enable it only when the master does not factor the same clients, otherwise traffic is multiplied twice.
+* The engine identifies clients by e-mail: renaming a client in 3x-ui makes it a new client; set its factor again.
+* Clients are listed in the same order as the 3x-ui clients page (by client id).
+* Fonts: drop a `.woff2` (e.g. `Vazirmatn.woff2`) into `xfpanel/web/fonts/` and the panel uses it automatically; otherwise system fonts are used.
+
 ## Limits
 
 SQLite databases only for the web panel (CLI works with PostgreSQL); the bundled engine is `linux_amd64` (put an `arm64` release into `vendor/` for ARM). Python 3.8+ is required (installed automatically).

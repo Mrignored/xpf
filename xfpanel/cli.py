@@ -140,6 +140,8 @@ def run(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("cleanup")
     p.add_argument("--apply", action="store_true")
     sub.add_parser("doctor")
+    p = sub.add_parser("node-factor", help="show or switch factoring on a panel managed by a 3x-ui master (node)")
+    p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
 
     p = sub.add_parser("credentials", help="set panel username/password")
     p.add_argument("--username")
@@ -240,6 +242,16 @@ def dispatch(args: argparse.Namespace, mgr: core.Manager) -> int:  # noqa: C901 
         print(mgr.cleanup(dry_run=not args.apply))
     elif cmd == "doctor":
         print(mgr.doctor())
+    elif cmd == "node-factor":
+        info = mgr.node_info() if args.state == "status" else mgr.set_node_factoring(args.state == "on")
+        print("panel role              : {}{}".format(info["role"], " ({} nodes)".format(info["nodes"]) if info["nodes"] else ""))
+        print("factor on managed node  : {}".format("on" if info["factor_on_managed_node"] else "off"))
+        if info.get("changed"):
+            print("service restarted       : {}".format("yes" if info.get("restarted") else "no (service not running)"))
+        if info["role"] == "node" and not info["factor_on_managed_node"]:
+            print("note: this panel is a node; factors are NOT applied here (run the engine on the master).")
+        if info["factor_on_managed_node"]:
+            print("warning: the master must not factor the same clients, or node traffic is factored twice.")
     elif cmd == "credentials":
         return set_credentials(args)
     elif cmd == "set-port":

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import ssl
@@ -31,6 +32,8 @@ STATIC = {
     "/i18n-en.js": ("i18n-en.js", "application/javascript; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
 }
+FONT_DIR = os.path.join(WEB_DIR, "fonts")
+FONT_FILE = re.compile(r"^[A-Za-z0-9_.-]+\.woff2$")
 COOKIE_NAME = "xfp_session"
 MAX_BODY = 1 << 20
 MAX_BULK = 2000
@@ -82,6 +85,8 @@ class Api:
             ("POST", "/api/actions/prune-events"): lambda q, b: self.m.prune_events(),
             ("POST", "/api/actions/backup"): lambda q, b: {"output": self.m.backup()},
             ("POST", "/api/actions/cleanup"): lambda q, b: {"output": self.m.cleanup(bool(b.get("dry_run", True)))},
+            ("GET", "/api/node"): lambda q, b: self.m.node_info(),
+            ("POST", "/api/actions/node-factor"): lambda q, b: self.m.set_node_factoring(b.get("enabled")),
             ("POST", "/api/actions/doctor"): lambda q, b: {"output": self.m.doctor()},
             ("POST", "/api/account"): self.account,
             ("POST", "/api/actions/uninstall"): self.uninstall,
@@ -276,6 +281,19 @@ class Handler(BaseHTTPRequestHandler):
         """The browser sends its UI language, so server messages match it (Persian by default)."""
         i18n.set_lang(self.headers.get("X-Lang") or "fa")
 
+    @staticmethod
+    def _fonts_css() -> str:
+        """@font-face rules for every .woff2 dropped into web/fonts (Vazirmatn.woff2 -> family "Vazirmatn")."""
+        rules = []
+        try:
+            names = sorted(n for n in os.listdir(FONT_DIR) if FONT_FILE.match(n))
+        except OSError:
+            names = []
+        for name in names:
+            family = re.sub(r"[-_.]?(variable|regular|bold|medium)?\.woff2$", "", name, flags=re.I)
+            rules.append('@font-face{font-family:"%s";src:url("/fonts/%s") format("woff2");font-weight:100 900;font-display:swap}' % (family, name))
+        return "\n".join(rules) + "\n"
+
     def do_GET(self) -> None:
         self._pick_language()
         url = urlsplit(self.path)
@@ -284,6 +302,16 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with open(os.path.join(WEB_DIR, name), "rb") as fh:
                     self._send(200, fh.read(), ctype)
+            except OSError:
+                self._json(404, {"error": "not found"})
+            return
+        if url.path == "/fonts.css":
+            self._send(200, self._fonts_css().encode("utf-8"), "text/css; charset=utf-8")
+            return
+        if url.path.startswith("/fonts/") and FONT_FILE.match(url.path[7:]):
+            try:
+                with open(os.path.join(FONT_DIR, url.path[7:]), "rb") as fh:
+                    self._send(200, fh.read(), "font/woff2")
             except OSError:
                 self._json(404, {"error": "not found"})
             return
